@@ -1,14 +1,44 @@
-
 use pyo3::prelude::*;
 use pyo3::py_run;
 use pyo3::types::PyDict;
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
+struct GenState {
+    timestamp: u64,
+    last: Instant,
+    random: u128,
+}
+
 #[pyfunction]
 fn new() -> PyResult<PyUlid> {
-    let ulid = Ulid::new();
-    Ok(PyUlid::new(ulid))
+    thread_local! {
+            static GEN_STATE: RefCell<GenState> = {RefCell::new(GenState {
+                timestamp: 0,
+                last: Instant::now(),
+                random: 0,
+            })};
+    }
+
+    GEN_STATE.with(|s| {
+        let mut x = s.borrow_mut();
+        if x.last.elapsed().as_micros() > 10 {
+            let now = OffsetDateTime::now_utc();
+            let timestamp = (now.unix_timestamp_nanos() / 1_000_000) as u64;
+            *x = GenState {
+                timestamp,
+                last: Instant::now(),
+                random: rand::random(),
+            };
+        } else {
+            x.random += 1;
+        }
+
+        Ok(PyUlid::new(Ulid::from_parts(x.timestamp, x.random)))
+    })
 }
 
 #[pyfunction]
@@ -17,7 +47,14 @@ fn batch_new(batch_size: usize) -> PyResult<Vec<PyUlid>> {
     let mut rng = rand::thread_rng();
     let now = OffsetDateTime::now_utc();
 
-    Ok((0..batch_size).map(|_| PyUlid::new(gen.generate_from_datetime_with_source(now, &mut rng).unwrap())).collect())
+    Ok((0..batch_size)
+        .map(|_| {
+            PyUlid::new(
+                gen.generate_from_datetime_with_source(now, &mut rng)
+                    .unwrap(),
+            )
+        })
+        .collect())
 }
 
 #[pyclass]
@@ -40,7 +77,7 @@ impl PyUlid {
     }
 
     pub fn bytes(&self) -> PyResult<Vec<u8>> {
-        Ok(self.0.0.to_le_bytes().to_vec())
+        Ok(self.0 .0.to_le_bytes().to_vec())
     }
 
     pub fn timestamp(&self) -> u64 {
@@ -55,15 +92,19 @@ impl PyUlid {
         self.0.to_string()
     }
 
-    pub fn uuid(&self) ->  PyResult<Py<PyAny>> {
+    pub fn uuid(&self) -> PyResult<Py<PyAny>> {
         Python::with_gil(|py| {
             let locals = PyDict::new(py);
             let uuid = py.import("uuid")?.getattr("UUID")?;
             locals.set_item("UUID", uuid)?;
-            py.eval(format!("UUID(int={})", self.0.0).as_str(), None, Some(locals)).map(|p| p.to_object(py))
+            py.eval(
+                format!("UUID(int={})", self.0 .0).as_str(),
+                None,
+                Some(locals),
+            )
+            .map(|p| p.to_object(py))
         })
     }
-
 }
 
 /// A Python module implemented in Rust.
