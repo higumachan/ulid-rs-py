@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::py_run;
 use pyo3::types::PyDict;
 use std::cell::RefCell;
+use std::mem::transmute;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use time::OffsetDateTime;
@@ -15,30 +16,32 @@ struct GenState {
 
 #[pyfunction]
 fn new() -> PyResult<PyUlid> {
-    thread_local! {
-            static GEN_STATE: RefCell<GenState> = {RefCell::new(GenState {
+    unsafe {
+        static mut GEN_STATE: GenState = {
+            GenState {
                 timestamp: 0,
-                last: Instant::now(),
+                last: unsafe { transmute::<u64, _>(0) },
                 random: 0,
-            })};
-    }
+            }
+        };
 
-    GEN_STATE.with(|s| {
-        let mut x = s.borrow_mut();
-        if x.last.elapsed().as_micros() > 10 {
+        if GEN_STATE.last.elapsed().as_micros() > 10 {
             let now = OffsetDateTime::now_utc();
             let timestamp = (now.unix_timestamp_nanos() / 1_000_000) as u64;
-            *x = GenState {
+            GEN_STATE = GenState {
                 timestamp,
                 last: Instant::now(),
                 random: rand::random(),
             };
         } else {
-            x.random += 1;
+            GEN_STATE.random += 1;
         }
 
-        Ok(PyUlid::new(Ulid::from_parts(x.timestamp, x.random)))
-    })
+        Ok(PyUlid::new(Ulid::from_parts(
+            GEN_STATE.timestamp,
+            GEN_STATE.random,
+        )))
+    }
 }
 
 #[pyfunction]
