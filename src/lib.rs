@@ -1,8 +1,10 @@
 use pyo3::prelude::*;
 use pyo3::py_run;
 use pyo3::types::PyDict;
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::borrow::BorrowMut;
+use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Once;
 use std::time::Instant;
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -15,29 +17,36 @@ struct GenState {
 
 #[pyfunction]
 fn new() -> PyResult<PyUlid> {
+    static once: Once = Once::new();
+    static checktime: AtomicBool = AtomicBool::new(true);
+    once.call_once(|| {
+        std::thread::spawn(|| {
+            let mut last = Instant::now();
+            loop {
+                if checktime.load(Ordering::Relaxed) {
+                    if last.elapsed().as_micros() > 100 {
+                        last = Instant::now();
+                        checktime.store(true, Ordering::Relaxed);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_micros(10));
+            }
+        });
+    });
     thread_local! {
-            static GEN_STATE: RefCell<GenState> = {RefCell::new(GenState {
-                timestamp: 0,
-                last: Instant::now(),
-                random: 0,
-            })};
+            static GEN_STATE: Cell<Ulid> = { Cell::new(Ulid::new()) };
     }
 
     GEN_STATE.with(|s| {
-        let mut x = s.borrow_mut();
-        if x.last.elapsed().as_micros() > 10 {
-            let now = OffsetDateTime::now_utc();
-            let timestamp = (now.unix_timestamp_nanos() / 1_000_000) as u64;
-            *x = GenState {
-                timestamp,
-                last: Instant::now(),
-                random: rand::random(),
-            };
+        let x = if checktime.fetch_and(false, Ordering::Relaxed) {
+            s.set(Ulid::new());
+            s.get()
         } else {
-            x.random += 1;
-        }
-
-        Ok(PyUlid::new(Ulid::from_parts(x.timestamp, x.random)))
+            let x = s.get().increment().unwrap();
+            s.set(x);
+            x
+        };
+        Ok(PyUlid::new(x))
     })
 }
 
