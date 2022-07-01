@@ -21,14 +21,17 @@ fn new() -> PyResult<PyUlid> {
     static checktime: AtomicBool = AtomicBool::new(true);
     once.call_once(|| {
         std::thread::spawn(|| {
-            let mut last = Instant::now();
+            println!("Starting thread");
+            thread_local! {
+                    static LAST: Cell<Instant> = { Cell::new(Instant::now()) };
+            }
             loop {
-                if checktime.load(Ordering::Relaxed) {
-                    if last.elapsed().as_micros() > 100 {
-                        last = Instant::now();
+                LAST.with(|last| {
+                    if last.get().elapsed().as_micros() > 100 {
+                        last.set(Instant::now());
                         checktime.store(true, Ordering::Relaxed);
                     }
-                }
+                });
                 std::thread::sleep(std::time::Duration::from_micros(10));
             }
         });
@@ -38,7 +41,8 @@ fn new() -> PyResult<PyUlid> {
     }
 
     GEN_STATE.with(|s| {
-        let x = if checktime.fetch_and(false, Ordering::Relaxed) {
+        let x = if checktime.load(Ordering::Relaxed) {
+            checktime.store(false, Ordering::Relaxed);
             s.set(Ulid::new());
             s.get()
         } else {
