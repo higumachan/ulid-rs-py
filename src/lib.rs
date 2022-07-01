@@ -21,8 +21,9 @@ fn new() -> PyResult<PyUlid> {
     static checktime: AtomicBool = AtomicBool::new(true);
     once.call_once(|| {
         std::thread::spawn(|| {
-            println!("Starting thread");
             thread_local! {
+
+
                     static LAST: Cell<Instant> = { Cell::new(Instant::now()) };
             }
             loop {
