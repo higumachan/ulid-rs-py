@@ -18,15 +18,13 @@ fn new() -> PyResult<PyUlid> {
             thread_local! {
                 static LAST: Cell<Instant> = { Cell::new(Instant::now()) };
             }
-            loop {
-                LAST.with(|last| {
-                    if last.get().elapsed().as_micros() > 100 {
-                        last.set(Instant::now());
-                        CHECK_TIME.store(true, Ordering::Relaxed);
-                    }
-                });
-                std::thread::sleep(std::time::Duration::from_micros(10));
-            }
+            LAST.with(|last| loop {
+                if last.get().elapsed().as_micros() > 100 {
+                    last.set(Instant::now());
+                    CHECK_TIME.store(true, Ordering::Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_micros(100));
+            });
         });
     });
     thread_local! {
