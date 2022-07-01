@@ -9,28 +9,20 @@ use std::time::Instant;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
-struct GenState {
-    timestamp: u64,
-    last: Instant,
-    random: u128,
-}
-
 #[pyfunction]
 fn new() -> PyResult<PyUlid> {
-    static once: Once = Once::new();
-    static checktime: AtomicBool = AtomicBool::new(true);
-    once.call_once(|| {
+    static ONCE: Once = Once::new();
+    static CHECK_TIME: AtomicBool = AtomicBool::new(true);
+    ONCE.call_once(|| {
         std::thread::spawn(|| {
             thread_local! {
-
-
-                    static LAST: Cell<Instant> = { Cell::new(Instant::now()) };
+                static LAST: Cell<Instant> = { Cell::new(Instant::now()) };
             }
             loop {
                 LAST.with(|last| {
                     if last.get().elapsed().as_micros() > 100 {
                         last.set(Instant::now());
-                        checktime.store(true, Ordering::Relaxed);
+                        CHECK_TIME.store(true, Ordering::Relaxed);
                     }
                 });
                 std::thread::sleep(std::time::Duration::from_micros(10));
@@ -38,12 +30,11 @@ fn new() -> PyResult<PyUlid> {
         });
     });
     thread_local! {
-            static GEN_STATE: Cell<Ulid> = { Cell::new(Ulid::new()) };
+        static GEN_STATE: Cell<Ulid> = { Cell::new(Ulid::new()) };
     }
 
     GEN_STATE.with(|s| {
-        let x = if checktime.load(Ordering::Relaxed) {
-            checktime.store(false, Ordering::Relaxed);
+        let x = if CHECK_TIME.fetch_and(false, Ordering::Relaxed) {
             s.set(Ulid::new());
             s.get()
         } else {
